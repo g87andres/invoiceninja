@@ -15,5 +15,5 @@
     
     # In case of running InvoiceNinja in a Subdomain like invoiceninja.example.com,
     # you have to enablel the following line:
-    # RewriteBase /
+    RewriteBase /
 </IfModule>
