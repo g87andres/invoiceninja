@@ -18,11 +18,15 @@ use App\Ninja\Repositories\TaskRepository;
 use App\Ninja\Repositories\InvoiceRepository;
 use App\Services\TaskService;
 
+use App\Http\Requests\TaskRequest;
+use App\Http\Requests\CreateTaskRequest;
+use App\Http\Requests\UpdateTaskRequest;
+
 class TaskController extends BaseController
 {
     protected $taskRepo;
     protected $taskService;
-    protected $model = 'App\Models\Task';
+    protected $entityType = ENTITY_TASK;
 
     public function __construct(TaskRepository $taskRepo, InvoiceRepository $invoiceRepo, TaskService $taskService)
     {
@@ -66,7 +70,7 @@ class TaskController extends BaseController
      *
      * @return Response
      */
-    public function store()
+    public function store(CreateTaskRequest $request)
     {
         return $this->save();
     }
@@ -83,16 +87,13 @@ class TaskController extends BaseController
      *
      * @return Response
      */
-    public function create($clientPublicId = 0)
+    public function create(TaskRequest $request)
     {
-        if(!$this->checkCreatePermission($response)){
-            return $response;
-        }
         $this->checkTimezone();
 
         $data = [
             'task' => null,
-            'clientPublicId' => Input::old('client') ? Input::old('client') : $clientPublicId,
+            'clientPublicId' => Input::old('client') ? Input::old('client') : ($request->client_id ?: 0),
             'method' => 'POST',
             'url' => 'tasks',
             'title' => trans('texts.new_task'),
@@ -111,16 +112,12 @@ class TaskController extends BaseController
      * @param  int      $id
      * @return Response
      */
-    public function edit($publicId)
+    public function edit(TaskRequest $request)
     {
         $this->checkTimezone();
 
-        $task = Task::scope($publicId)->with('client', 'invoice')->withTrashed()->firstOrFail();
+        $task = $request->entity();
 
-        if(!$this->checkEditPermission($task, $response)){
-            return $response;
-        }
-        
         $actions = [];
         if ($task->invoice) {
             $actions[] = ['url' => URL::to("invoices/{$task->invoice->public_id}/edit"), 'label' => trans("texts.view_invoice")];
@@ -147,7 +144,7 @@ class TaskController extends BaseController
             'task' => $task,
             'clientPublicId' => $task->client ? $task->client->public_id : 0,
             'method' => 'PUT',
-            'url' => 'tasks/'.$publicId,
+            'url' => 'tasks/'.$task->public_id,
             'title' => trans('texts.edit_task'),
             'duration' => $task->is_running ? $task->getCurrentDuration() : $task->getDuration(),
             'actions' => $actions,
@@ -167,15 +164,17 @@ class TaskController extends BaseController
      * @param  int      $id
      * @return Response
      */
-    public function update($publicId)
+    public function update(UpdateTaskRequest $request)
     {
-        return $this->save($publicId);
+        $task = $request->entity();
+
+        return $this->save($task->public_id);
     }
 
     private static function getViewModel()
     {
         return [
-            'clients' => Client::scope()->with('contacts')->orderBy('name')->get(),
+            'clients' => Client::scope()->viewable()->with('contacts')->orderBy('name')->get(),
             'account' => Auth::user()->account,
         ];
     }
@@ -183,21 +182,9 @@ class TaskController extends BaseController
     private function save($publicId = null)
     {
         $action = Input::get('action');
-        
-        if(!$this->checkUpdatePermission(array('public_id'=>$publicId)/* Hacky, but works */, $response)){
-            return $response;
-        }
 
         if (in_array($action, ['archive', 'delete', 'restore'])) {
             return self::bulk();
-        }
-
-        if ($validator = $this->taskRepo->getErrors(Input::all())) {
-            $url = $publicId ? 'tasks/'.$publicId.'/edit' : 'tasks/create';
-            Session::flash('error', trans('texts.task_errors'));
-            return Redirect::to($url)
-                ->withErrors($validator)
-                ->withInput();
         }
 
         $task = $this->taskRepo->save($publicId, Input::all());
@@ -223,7 +210,7 @@ class TaskController extends BaseController
             $tasks = Task::scope($ids)->with('client')->get();
             $clientPublicId = false;
             $data = [];
-            
+
             foreach ($tasks as $task) {
                 if ($task->client) {
                     if (!$clientPublicId) {
@@ -241,7 +228,7 @@ class TaskController extends BaseController
                     Session::flash('error', trans('texts.task_error_invoiced'));
                     return Redirect::to('tasks');
                 }
-                
+
                 $account = Auth::user()->account;
                 $data[] = [
                     'publicId' => $task->public_id,
